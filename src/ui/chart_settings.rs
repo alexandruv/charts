@@ -793,6 +793,51 @@ fn appearance_group(
         group.add(&row);
     }
 
+    if let Params::Macd { signal_color, .. } = &indicator.params {
+        let shown = window.theme().companion_or(signal_color.as_ref(), colour);
+        group.add(&colour_row(
+            window,
+            refresh,
+            &Ink::new(String::new),
+            "Signal colour",
+            &shown,
+            signal_color.clone(),
+            move |indicator, choice| {
+                if let Params::Macd { signal_color, .. } = &mut indicator.params {
+                    *signal_color = choice;
+                }
+            },
+            id,
+        ));
+    }
+    let low = match &indicator.params {
+        Params::Liquidity { low_color, .. } => Some(("Sell-side colour", low_color)),
+        Params::KeyLevels { low_color, .. } => Some(("Low colour", low_color)),
+        Params::FairValueGap { low_color, .. } => Some(("Bullish gap colour", low_color)),
+        _ => None,
+    };
+    if let Some((title, low_color)) = low {
+        let shown =
+            low_color.as_ref().map_or_else(|| colour.to_string(), |c| c.resolve(&window.theme()));
+        group.add(&colour_row(
+            window,
+            refresh,
+            &Ink::new(String::new),
+            title,
+            &shown,
+            low_color.clone(),
+            move |indicator, choice| {
+                if let Params::Liquidity { low_color, .. }
+                | Params::KeyLevels { low_color, .. }
+                | Params::FairValueGap { low_color, .. } = &mut indicator.params
+                {
+                    *low_color = choice;
+                }
+            },
+            id,
+        ));
+    }
+
     // %D follows the theme the way a point of control does: unset is the next
     // colour along from %K's, so the two lines never come out the same.
     if let Params::Stochastic { d_color, .. } = &indicator.params {
@@ -1129,6 +1174,93 @@ fn parameters_group(
             ));
             group.add(&pane_height_row(window, refresh, id, *height));
         }
+        Params::Bollinger { period, .. } => {
+            group.add(&spin_row(
+                window, refresh, id, "Period", *period as f64, 2.0, 500.0, 1.0,
+                move |indicator, value| {
+                    if let Params::Bollinger { period, .. } = &mut indicator.params {
+                        *period = value as usize;
+                    }
+                },
+            ));
+        }
+        Params::Macd { fast, slow, signal, height, .. } => {
+            group.add(&spin_row(
+                window, refresh, id, "Fast length", *fast as f64, 1.0, 200.0, 1.0,
+                move |indicator, value| {
+                    if let Params::Macd { fast, .. } = &mut indicator.params {
+                        *fast = value as usize;
+                    }
+                },
+            ));
+            group.add(&spin_row(
+                window, refresh, id, "Slow length", *slow as f64, 1.0, 400.0, 1.0,
+                move |indicator, value| {
+                    if let Params::Macd { slow, .. } = &mut indicator.params {
+                        *slow = value as usize;
+                    }
+                },
+            ));
+            group.add(&spin_row(
+                window, refresh, id, "Signal length", *signal as f64, 1.0, 100.0, 1.0,
+                move |indicator, value| {
+                    if let Params::Macd { signal, .. } = &mut indicator.params {
+                        *signal = value as usize;
+                    }
+                },
+            ));
+            group.add(&pane_height_row(window, refresh, id, *height));
+        }
+        Params::Liquidity { period, tolerance, history, .. } => {
+            group.add(&spin_row(
+                window, refresh, id, "Swing strength (bars each side)", *period as f64, 1.0, 50.0, 1.0,
+                move |indicator, value| {
+                    if let Params::Liquidity { period, .. } = &mut indicator.params {
+                        *period = value as usize;
+                    }
+                },
+            ));
+            group.add(&spin_row(
+                window, refresh, id, "Equal highs / lows within (ATR)", *tolerance, 0.0, 2.0, 0.1,
+                move |indicator, value| {
+                    if let Params::Liquidity { tolerance, .. } = &mut indicator.params {
+                        *tolerance = value;
+                    }
+                },
+            ));
+            group.add(&switch_row(
+                window, refresh, id, "Show swept levels", "Up to the bar that took them", *history,
+                move |indicator, on| {
+                    if let Params::Liquidity { history, .. } = &mut indicator.params {
+                        *history = on;
+                    }
+                },
+            ));
+        }
+        Params::KeyLevels { reset, .. } => {
+            let row = reset_row(window, refresh, id, *reset);
+            row.set_title("Previous");
+            row.set_subtitle("Whose high and low are carried forward");
+            group.add(&row);
+        }
+        Params::FairValueGap { min_size, history, .. } => {
+            group.add(&spin_row(
+                window, refresh, id, "Smallest gap (ATR)", *min_size, 0.0, 5.0, 0.1,
+                move |indicator, value| {
+                    if let Params::FairValueGap { min_size, .. } = &mut indicator.params {
+                        *min_size = value;
+                    }
+                },
+            ));
+            group.add(&switch_row(
+                window, refresh, id, "Show filled gaps", "Up to the bar that filled them", *history,
+                move |indicator, on| {
+                    if let Params::FairValueGap { history, .. } = &mut indicator.params {
+                        *history = on;
+                    }
+                },
+            ));
+        }
         Params::VolumeProfile { reset, rows, value_area, .. } => {
             group.add(&reset_row(window, refresh, id, *reset));
             for row in rows_rows(window, refresh, id, *rows) {
@@ -1210,7 +1342,9 @@ fn band_groups(
     line_colour: &str,
     indicator: &Indicator,
 ) -> Vec<adw::PreferencesGroup> {
-    let Params::Vwap { bands, .. } = &indicator.params else { return Vec::new() };
+    let (Params::Vwap { bands, .. } | Params::Bollinger { bands, .. }) = &indicator.params else {
+        return Vec::new();
+    };
     let id = indicator.id;
     let line_colour = line_colour.to_string();
     let mut groups = Vec::new();
@@ -1228,7 +1362,7 @@ fn band_groups(
         let refresh_for_show = refresh.clone();
         switch.connect_state_set(move |_, on| {
             update(&window_for_show, id, move |indicator| {
-                if let Params::Vwap { bands, .. } = &mut indicator.params
+                if let Params::Vwap { bands, .. } | Params::Bollinger { bands, .. } = &mut indicator.params
                     && let Some(band) = bands.get_mut(index)
                 {
                     band.enabled = on;
@@ -1254,7 +1388,7 @@ fn band_groups(
             1,
             move |value| {
                 update(&window_for_dev, id, move |indicator| {
-                    if let Params::Vwap { bands, .. } = &mut indicator.params
+                    if let Params::Vwap { bands, .. } | Params::Bollinger { bands, .. } = &mut indicator.params
                         && let Some(band) = bands.get_mut(index)
                     {
                         band.deviations = value;
@@ -1275,7 +1409,7 @@ fn band_groups(
         let refresh_for_fill = refresh.clone();
         fill.connect_state_set(move |_, on| {
             update(&window_for_fill, id, move |indicator| {
-                if let Params::Vwap { bands, .. } = &mut indicator.params
+                if let Params::Vwap { bands, .. } | Params::Bollinger { bands, .. } = &mut indicator.params
                     && let Some(band) = bands.get_mut(index)
                 {
                     band.fill = on;
@@ -1304,7 +1438,7 @@ fn band_groups(
                 MIN_FILL_ALPHA,
                 MAX_FILL_ALPHA,
                 move |indicator, share| {
-                    if let Params::Vwap { bands, .. } = &mut indicator.params
+                    if let Params::Vwap { bands, .. } | Params::Bollinger { bands, .. } = &mut indicator.params
                         && let Some(band) = bands.get_mut(index)
                     {
                         band.fill_alpha = Some(share);
@@ -1329,7 +1463,9 @@ fn band_groups(
                     .iter()
                     .find(|i| i.id == id)
                     .and_then(|i| match &i.params {
-                        Params::Vwap { bands, .. } => bands.get(index).and_then(|b| b.color.clone()),
+                        Params::Vwap { bands, .. } | Params::Bollinger { bands, .. } => {
+                            bands.get(index).and_then(|b| b.color.clone())
+                        }
                         _ => None,
                     })
                     .map(|choice| choice.resolve(&window.theme()));
@@ -1345,7 +1481,7 @@ fn band_groups(
             &current,
             band.color.clone(),
             move |indicator, choice| {
-                if let Params::Vwap { bands, .. } = &mut indicator.params
+                if let Params::Vwap { bands, .. } | Params::Bollinger { bands, .. } = &mut indicator.params
                     && let Some(band) = bands.get_mut(index)
                 {
                     band.color = choice;
@@ -1356,7 +1492,7 @@ fn band_groups(
 
         for row in stroke_rows(window, refresh, &ink, id, "", band.stroke, {
             move |indicator: &mut Indicator, stroke: Stroke| {
-                if let Params::Vwap { bands, .. } = &mut indicator.params
+                if let Params::Vwap { bands, .. } | Params::Bollinger { bands, .. } = &mut indicator.params
                     && let Some(band) = bands.get_mut(index)
                 {
                     band.stroke = stroke;
@@ -1391,11 +1527,16 @@ fn reset_row(
         update(&window, id, |indicator| match &mut indicator.params {
             Params::Vwap { reset, .. } => *reset = chosen,
             Params::VolumeProfile { reset, .. } => *reset = chosen,
+            Params::KeyLevels { reset, .. } => *reset = chosen,
             Params::MovingAverage { .. }
             | Params::Volume { .. }
             | Params::Rsi { .. }
             | Params::Atr { .. }
-            | Params::Stochastic { .. } => {}
+            | Params::Stochastic { .. }
+            | Params::Bollinger { .. }
+            | Params::Macd { .. }
+            | Params::Liquidity { .. }
+            | Params::FairValueGap { .. } => {}
         });
         refresh.run();
     });
@@ -1427,6 +1568,31 @@ fn spin_row(
         let value = row.value();
         update(&window, id, |indicator| apply(indicator, value));
         // The list behind this panel shows the period in its title.
+        refresh.run();
+    });
+    row
+}
+
+/// An on/off parameter.
+#[allow(clippy::too_many_arguments)]
+fn switch_row(
+    window: &Rc<Window>,
+    refresh: &Refresh,
+    id: u32,
+    title: &str,
+    subtitle: &str,
+    on: bool,
+    apply: impl Fn(&mut Indicator, bool) + 'static,
+) -> adw::SwitchRow {
+    let row = adw::SwitchRow::new();
+    row.set_title(title);
+    row.set_subtitle(subtitle);
+    row.set_active(on);
+    let window = window.clone();
+    let refresh = refresh.clone();
+    row.connect_active_notify(move |row| {
+        let on = row.is_active();
+        update(&window, id, |indicator| apply(indicator, on));
         refresh.run();
     });
     row
@@ -1601,7 +1767,8 @@ fn pane_height_row(
             Params::Volume { height }
             | Params::Rsi { height, .. }
             | Params::Atr { height, .. }
-            | Params::Stochastic { height, .. } => *height = share,
+            | Params::Stochastic { height, .. }
+            | Params::Macd { height, .. } => *height = share,
             _ => {}
         },
     )

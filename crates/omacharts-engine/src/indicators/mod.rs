@@ -9,6 +9,7 @@
 //! so adding four indicators gives four colours that already work together,
 //! in any theme, including one the user edited.
 
+pub mod levels;
 pub mod oscillators;
 pub mod periods;
 pub mod profile;
@@ -19,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::bars::{Bar, Timeframe};
 use crate::theme::{ColorChoice, Theme, SWATCH_SEQUENCE};
 
+pub use levels::{Level, Side};
 pub use periods::Reset;
 pub use profile::{Profile, ProfileRow};
 pub use vwap::{Bands, MAX_FILL_ALPHA, MIN_FILL_ALPHA};
@@ -94,10 +96,15 @@ pub enum Kind {
     Rsi,
     Atr,
     Stochastic,
+    Bollinger,
+    Macd,
+    Liquidity,
+    KeyLevels,
+    FairValueGap,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 8] = [
+    pub const ALL: [Kind; 13] = [
         Kind::Volume,
         Kind::Sma,
         Kind::Ema,
@@ -106,6 +113,11 @@ impl Kind {
         Kind::Rsi,
         Kind::Atr,
         Kind::Stochastic,
+        Kind::Bollinger,
+        Kind::Macd,
+        Kind::Liquidity,
+        Kind::KeyLevels,
+        Kind::FairValueGap,
     ];
 
     pub fn name(self) -> &'static str {
@@ -120,6 +132,11 @@ impl Kind {
             Kind::Rsi => "Relative Strength Index",
             Kind::Atr => "Average True Range",
             Kind::Stochastic => "Stochastic",
+            Kind::Bollinger => "Bollinger Bands",
+            Kind::Macd => "Moving Average Convergence Divergence",
+            Kind::Liquidity => "Liquidity Levels",
+            Kind::KeyLevels => "Key Levels (Previous High / Low)",
+            Kind::FairValueGap => "Fair Value Gaps",
         }
     }
 
@@ -136,6 +153,11 @@ impl Kind {
             Kind::Rsi => "RSI",
             Kind::Atr => "ATR",
             Kind::Stochastic => "Stoch",
+            Kind::Bollinger => "BB",
+            Kind::Macd => "MACD",
+            Kind::Liquidity => "Liq",
+            Kind::KeyLevels => "Levels",
+            Kind::FairValueGap => "FVG",
         }
     }
 
@@ -151,6 +173,17 @@ impl Kind {
             Kind::Rsi => &["rsi", "relative strength", "oscillator", "momentum", "overbought"],
             Kind::Atr => &["atr", "average true range", "volatility", "range", "stop"],
             Kind::Stochastic => &["stochastic", "stoch", "kd", "%k", "oscillator", "momentum", "overbought"],
+            Kind::Bollinger => &["bollinger", "bb", "bands", "volatility", "squeeze", "deviation"],
+            Kind::Macd => &["macd", "convergence", "divergence", "momentum", "histogram", "signal"],
+            Kind::Liquidity => &[
+                "liquidity", "liq", "swing", "highs", "lows", "sweep", "stop hunt", "bsl", "ssl",
+                "equal highs", "equal lows", "eqh", "eql", "smc", "ict",
+            ],
+            Kind::KeyLevels => &[
+                "key levels", "levels", "previous day", "pdh", "pdl", "pwh", "pwl", "high low",
+                "liquidity", "support", "resistance",
+            ],
+            Kind::FairValueGap => &["fair value gap", "fvg", "imbalance", "gap", "liquidity void", "smc", "ict"],
         }
     }
 
@@ -164,6 +197,11 @@ impl Kind {
             Kind::Rsi => "rsi",
             Kind::Atr => "atr",
             Kind::Stochastic => "stochastic",
+            Kind::Bollinger => "bollinger",
+            Kind::Macd => "macd",
+            Kind::Liquidity => "liquidity",
+            Kind::KeyLevels => "key_levels",
+            Kind::FairValueGap => "fair_value_gap",
         }
     }
 
@@ -173,7 +211,7 @@ impl Kind {
     /// the order of the strips is edited where nothing has been computed: the
     /// settings list, and the command line.
     pub fn in_own_pane(self) -> bool {
-        matches!(self, Kind::Volume | Kind::Rsi | Kind::Atr | Kind::Stochastic)
+        matches!(self, Kind::Volume | Kind::Rsi | Kind::Atr | Kind::Stochastic | Kind::Macd)
     }
 
     pub fn default_params(self) -> Params {
@@ -208,6 +246,26 @@ impl Kind {
                 overbought: 80.0,
                 oversold: 20.0,
                 d_color: None,
+            },
+            Kind::Bollinger => Params::Bollinger { period: 20, bands: vwap::bollinger_bands() },
+            Kind::Macd => Params::Macd {
+                fast: 12,
+                slow: 26,
+                signal: 9,
+                height: 0.16,
+                signal_color: None,
+            },
+            Kind::Liquidity => Params::Liquidity {
+                period: 5,
+                tolerance: 0.1,
+                history: true,
+                low_color: None,
+            },
+            Kind::KeyLevels => Params::KeyLevels { reset: Reset::Session, low_color: None },
+            Kind::FairValueGap => Params::FairValueGap {
+                min_size: 0.2,
+                history: false,
+                low_color: None,
             },
         }
     }
@@ -267,6 +325,36 @@ pub enum Params {
         /// two lines are told apart without anybody having to choose.
         #[serde(default)]
         d_color: Option<ColorChoice>,
+    },
+    Bollinger {
+        period: usize,
+        bands: Vec<vwap::Band>,
+    },
+    Macd {
+        fast: usize,
+        slow: usize,
+        signal: usize,
+        height: f64,
+        #[serde(default)]
+        signal_color: Option<ColorChoice>,
+    },
+    Liquidity {
+        period: usize,
+        tolerance: f64,
+        history: bool,
+        #[serde(default)]
+        low_color: Option<ColorChoice>,
+    },
+    KeyLevels {
+        reset: Reset,
+        #[serde(default)]
+        low_color: Option<ColorChoice>,
+    },
+    FairValueGap {
+        min_size: f64,
+        history: bool,
+        #[serde(default)]
+        low_color: Option<ColorChoice>,
     },
 }
 
@@ -342,6 +430,14 @@ impl Indicator {
             Params::Stochastic { period, k_smooth, d_period, .. } => {
                 format!("Stoch {period} {k_smooth} {d_period}")
             }
+            Params::Bollinger { period, .. } => format!("BB {period}"),
+            Params::Macd { fast, slow, signal, .. } => format!("MACD {fast} {slow} {signal}"),
+            Params::Liquidity { period, .. } => format!("Liquidity {period}"),
+            Params::KeyLevels { reset, .. } => {
+                let period = timeframe.map_or(*reset, |tf| key_level_period(*reset, tf));
+                format!("Levels · Prior {}", period.label().to_lowercase())
+            }
+            Params::FairValueGap { .. } => "FVG".to_string(),
         }
     }
 
@@ -414,6 +510,7 @@ pub enum Output {
     Volume { values: Vec<f64>, height: f64 },
     /// A series drawn in a strip of its own, on its own scale.
     Pane(Pane),
+    Levels(Vec<Level>),
 }
 
 /// An indicator that cannot share the price scale, and so gets a strip of its
@@ -423,6 +520,7 @@ pub struct Pane {
     pub values: Vec<Option<f64>>,
     /// A second line over the first, on the same scale: a stochastic's %D.
     pub signal: Option<Vec<Option<f64>>>,
+    pub histogram: Option<Vec<Option<f64>>>,
     /// Share of the chart's height this strip takes.
     pub height: f64,
     /// The scale it always uses, or `None` to fit whatever is on screen.
@@ -613,6 +711,7 @@ pub fn compute(
         (Kind::Rsi, Params::Rsi { period, height, overbought, oversold }) => Output::Pane(Pane {
             values: oscillators::rsi(bars, *period),
             signal: None,
+            histogram: None,
             height: height.clamp(MIN_PANE_SHARE, MAX_PANE_SHARE),
             bounds: Some((0.0, 100.0)),
             guides: vec![*oversold, 50.0, *overbought],
@@ -621,6 +720,7 @@ pub fn compute(
         (Kind::Atr, Params::Atr { period, height }) => Output::Pane(Pane {
             values: oscillators::atr(bars, *period),
             signal: None,
+            histogram: None,
             height: height.clamp(MIN_PANE_SHARE, MAX_PANE_SHARE),
             bounds: None,
             guides: Vec::new(),
@@ -634,11 +734,36 @@ pub fn compute(
             Output::Pane(Pane {
                 values: k,
                 signal: Some(d),
+                histogram: None,
                 height: height.clamp(MIN_PANE_SHARE, MAX_PANE_SHARE),
                 bounds: Some((0.0, 100.0)),
                 guides: vec![*oversold, 50.0, *overbought],
                 band: Some((*oversold, *overbought)),
             })
+        }
+        (Kind::Macd, Params::Macd { fast, slow, signal, height, .. }) => {
+            let (line, slow_line, histogram) = oscillators::macd(bars, *fast, *slow, *signal);
+            Output::Pane(Pane {
+                values: line,
+                signal: Some(slow_line),
+                histogram: Some(histogram),
+                height: height.clamp(MIN_PANE_SHARE, MAX_PANE_SHARE),
+                bounds: None,
+                guides: vec![0.0],
+                band: None,
+            })
+        }
+        (Kind::Bollinger, Params::Bollinger { period, bands }) => {
+            Output::Bands(vwap::bollinger(bars, *period, bands))
+        }
+        (Kind::Liquidity, Params::Liquidity { period, tolerance, history, .. }) => {
+            Output::Levels(levels::liquidity(bars, *period, *tolerance, *history))
+        }
+        (Kind::KeyLevels, Params::KeyLevels { reset, .. }) => Output::Levels(
+            levels::key_levels(bars, key_level_period(*reset, timeframe), session_origin),
+        ),
+        (Kind::FairValueGap, Params::FairValueGap { min_size, history, .. }) => {
+            Output::Levels(levels::fair_value_gaps(bars, *min_size, *history))
         }
         (Kind::Volume, Params::Volume { height }) => Output::Volume {
             values: bars.iter().map(|bar| bar.volume).collect(),
@@ -658,6 +783,15 @@ pub fn compute(
         // indicator from a future version. Draw nothing rather than guess.
         _ => Output::Line(vec![None; bars.len()]),
     }
+}
+
+/// The period whose prior high and low a key-levels indicator draws.
+fn key_level_period(reset: Reset, timeframe: Timeframe) -> Reset {
+    Reset::ALL
+        .into_iter()
+        .skip_while(|r| *r != reset)
+        .find(|r| r.approx_seconds() > timeframe.seconds())
+        .unwrap_or(Reset::Year)
 }
 
 /// Simple moving average of closes.

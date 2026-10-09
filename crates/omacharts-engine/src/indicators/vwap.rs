@@ -198,12 +198,88 @@ pub fn compute(bars: &[Bar], reset: Reset, session_origin: i64, bands: &[Band]) 
     out
 }
 
+/// What Bollinger bands ship with: two standard deviations drawn, a faint
+/// shading between them, and the one and three deviation bands on offer but
+/// off — John Bollinger's own default, and TradingView's.
+pub fn bollinger_bands() -> Vec<Band> {
+    vec![
+        Band {
+            deviations: 1.0,
+            enabled: false,
+            color: None,
+            fill: false,
+            fill_alpha: None,
+            stroke: Stroke::new(1.0, LineStyle::Dotted),
+        },
+        Band {
+            deviations: 2.0,
+            enabled: true,
+            color: None,
+            fill: true,
+            fill_alpha: Some(0.06),
+            stroke: Stroke::new(1.0, LineStyle::Solid),
+        },
+        Band {
+            deviations: 3.0,
+            enabled: false,
+            color: None,
+            fill: false,
+            fill_alpha: None,
+            stroke: Stroke::new(1.0, LineStyle::Dashed),
+        },
+    ]
+}
+
+/// Bollinger bands: a simple average of closes, with bands at multiples of
+/// the closes' standard deviation over the same window.
+pub fn bollinger(bars: &[Bar], period: usize, bands: &[Band]) -> Bands {
+    let n = bars.len();
+    let mut out = Bands {
+        vwap: super::sma(bars, period),
+        bands: bands
+            .iter()
+            .map(|band| BandSeries {
+                deviations: band.deviations,
+                enabled: band.enabled,
+                color: band.color.clone(),
+                fill: band.fill,
+                fill_alpha: band.alpha(),
+                stroke: band.stroke,
+                upper: vec![None; n],
+                lower: vec![None; n],
+            })
+            .collect(),
+    };
+    for i in 0..n {
+        let Some(mean) = out.vwap[i] else { continue };
+        let window = &bars[i + 1 - period..=i];
+        let variance = window
+            .iter()
+            .map(|bar| (bar.close - mean).powi(2))
+            .sum::<f64>()
+            / period as f64;
+        let deviation = variance.sqrt();
+        for band in out.bands.iter_mut() {
+            band.upper[i] = Some(mean + deviation * band.deviations);
+            band.lower[i] = Some(mean - deviation * band.deviations);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn bar(ts: i64, price: f64, volume: f64) -> Bar {
-        Bar { ts, open: price, high: price, low: price, close: price, volume }
+        Bar {
+            ts,
+            open: price,
+            high: price,
+            low: price,
+            close: price,
+            volume,
+        }
     }
 
     /// Bands at the given multiples, all drawn, for tests that check values.
@@ -260,7 +336,11 @@ mod tests {
         // Two bars either side of midnight belong to the same session.
         let bars = vec![bar(DAY - 600, 10.0, 1.0), bar(DAY + 600, 20.0, 1.0)];
         let same_session = compute(&bars, Reset::Session, origin, &[]);
-        assert_eq!(same_session.vwap[1], Some(15.0), "one session, so it averages");
+        assert_eq!(
+            same_session.vwap[1],
+            Some(15.0),
+            "one session, so it averages"
+        );
 
         // With no origin they are two different days.
         let split = compute(&bars, Reset::Session, 0, &[]);
@@ -275,7 +355,10 @@ mod tests {
         let one = out.bands[0].upper[2].unwrap();
         let two = out.bands[1].upper[2].unwrap();
         assert!(one > vwap, "a band sits above the line");
-        assert!((two - vwap) > (one - vwap), "two deviations is wider than one");
+        assert!(
+            (two - vwap) > (one - vwap),
+            "two deviations is wider than one"
+        );
         // And symmetric.
         assert!(((vwap - out.bands[0].lower[2].unwrap()) - (one - vwap)).abs() < 1e-9);
     }
@@ -315,7 +398,11 @@ mod tests {
         let mut band = bands(&[1.0]).remove(0);
 
         band.fill_alpha = None;
-        assert_eq!(band.alpha(), FILL_ALPHA, "an unset band shades as it always has");
+        assert_eq!(
+            band.alpha(),
+            FILL_ALPHA,
+            "an unset band shades as it always has"
+        );
 
         for wanted in [0.0, 0.02, 0.6, 1.0] {
             band.fill_alpha = Some(wanted);
@@ -352,7 +439,10 @@ mod tests {
 
         let out = compute(&bars, Reset::Session, 0, &set);
         assert!(out.bands[0].fill, "the fill is on");
-        assert_eq!(out.bands[0].fill_alpha, 0.0, "and invisible, which is a different fact");
+        assert_eq!(
+            out.bands[0].fill_alpha, 0.0,
+            "and invisible, which is a different fact"
+        );
     }
 
     #[test]
@@ -364,7 +454,10 @@ mod tests {
             vec![1.0, 1.5, 2.0]
         );
         assert!(defaults.iter().all(|b| !b.enabled), "bands start off");
-        assert!(defaults.iter().all(|b| b.color.is_none()), "and follow the line's colour");
+        assert!(
+            defaults.iter().all(|b| b.color.is_none()),
+            "and follow the line's colour"
+        );
     }
 
     #[test]
@@ -378,7 +471,10 @@ mod tests {
         assert!(!out.bands[1].enabled);
         // Computed anyway, so switching it on needs no refetch.
         assert!(out.bands[1].upper[2].is_some());
-        assert_eq!(out.bands[2].deviations, 2.0, "the outer band did not shift inward");
+        assert_eq!(
+            out.bands[2].deviations, 2.0,
+            "the outer band did not shift inward"
+        );
     }
 
     #[test]
@@ -403,7 +499,10 @@ mod tests {
         assert!(LineStyle::Solid.dashes(1.0).is_empty());
         let thin = LineStyle::Dashed.dashes(1.0);
         let thick = LineStyle::Dashed.dashes(3.0);
-        assert!(thick[0] > thin[0], "a thick dashed line needs longer dashes");
+        assert!(
+            thick[0] > thin[0],
+            "a thick dashed line needs longer dashes"
+        );
         assert!(!LineStyle::Dotted.dashes(1.0).is_empty());
     }
 
@@ -411,5 +510,19 @@ mod tests {
     fn a_zero_width_line_is_not_drawn() {
         assert!(Stroke::new(0.0, LineStyle::Solid).is_hidden());
         assert!(!Stroke::default().is_hidden());
+    }
+
+    #[test]
+    fn bollinger_bands_sit_two_deviations_either_side_of_the_average() {
+        // Closes alternating 9 and 11: a mean of 10 and a deviation of 1.
+        let series: Vec<Bar> = (0..20)
+            .map(|i| bar(i * 60, if i % 2 == 0 { 9.0 } else { 11.0 }, 1.0))
+            .collect();
+        let out = bollinger(&series, 4, &bollinger_bands());
+        assert_eq!(out.vwap[2], None, "nothing before a full window");
+        assert_eq!(out.vwap[3], Some(10.0));
+        let two = &out.bands[1];
+        assert!(two.enabled && !out.bands[0].enabled && !out.bands[2].enabled);
+        assert_eq!((two.upper[19], two.lower[19]), (Some(12.0), Some(8.0)));
     }
 }

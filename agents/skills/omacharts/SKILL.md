@@ -8,7 +8,9 @@ description: >-
   the 15 minute", "chart SPY and QQQ side by side", "set me up for the
   open", "a 2x2 of the majors with RSI on each, linked", "put a 200-day
   average on this", "add AMD to my semis list", "what have I got open". Also
-  for indicators (moving average, VWAP, volume profile, RSI, ATR),
+  for indicators (moving average, VWAP, volume profile, RSI, ATR, MACD,
+  Bollinger bands) and liquidity (swing highs and lows, sweeps, equal highs
+  and lows, previous day and week highs and lows, fair value gaps),
   resolutions and sessions, bar styles and colours, watchlists and their
   sections, chartbooks, link groups, the instrument search, and the cached
   price data. Use it for any mention of omacharts, and whenever the user
@@ -95,6 +97,20 @@ omacharts chart indicator add rsi --chart pos:0 --period 14
 omacharts chart indicator add rsi --chart pos:1 --period 14
 omacharts chart indicator add rsi --chart pos:2 --period 14
 omacharts chart indicator add rsi --chart pos:3 --period 14
+```
+
+**Where the liquidity is.** Swing highs and lows are the buy-side and
+sell-side liquidity; a level stays drawn to the right edge until a bar trades
+through it, and equal highs or lows are drawn heavier. The previous session's
+and week's highs and lows, and the fair value gaps price has not yet filled,
+complete the picture of what price is likely to reach for:
+
+```
+omacharts chart set --chart pos:0 --symbol SPY --resolution 15m
+omacharts chart indicator add liquidity --chart pos:0 --period 5 --history off
+omacharts chart indicator add key_levels --chart pos:0 --anchor session
+omacharts chart indicator add key_levels --chart pos:0 --anchor week --color Rose
+omacharts chart indicator add fair_value_gap --chart pos:0 --min-size 0.3
 ```
 
 **Do not link four charts showing four different symbols.** A group is charts

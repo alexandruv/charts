@@ -24,7 +24,7 @@ pub fn commit_on_ctrl_enter(dialog: &impl IsA<gtk::Widget>, commit: impl Fn() + 
     let keys = gtk::EventControllerKey::new();
     keys.set_propagation_phase(gtk::PropagationPhase::Capture);
     keys.connect_key_pressed(move |_, key, _, state| {
-        if !state.contains(gtk::gdk::ModifierType::CONTROL_MASK) || !is_enter(key) {
+        if !crate::ui::shortcuts::command_held(state) || !is_enter(key) {
             return glib::Propagation::Proceed;
         }
         commit();

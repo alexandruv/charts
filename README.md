@@ -34,8 +34,13 @@ Fast, beautiful charting software for [Omarchy](https://omarchy.org).
   power users. Hotkeys for the whole app: split and close charts, resize them,
   walk the chartbooks, step the resolution, rotate the watchlists. Type a
   letter to find a symbol, a number to set a resolution. Press `?` to learn it all.
-- **Indicators.** Moving averages, VWAP with bands, volume, volume profile,
-  RSI, ATR and stochastic, each in its own resizable strip. More coming.
+- **Indicators.** Moving averages, VWAP with bands, Bollinger bands, volume,
+  volume profile, RSI, ATR, stochastic and MACD, each in its own resizable
+  strip.
+- **Liquidity.** Swing highs and lows as buy-side and sell-side liquidity,
+  held until a bar sweeps them, with equal highs and lows drawn heavier; the
+  previous session’s, week’s or month’s high and low; and fair value gaps
+  that fade on entry and remain until fully filled.
 - **Omarchy plugin.** Your watchlist in the bar, with sparklines, live, still
   there after the window closes. It installs itself the first time you run
   Omacharts on an Omarchy desktop, and `omacharts plugin` puts it back, brings
@@ -64,6 +69,24 @@ makepkg -si
 Either one gets you the command on your path, the man page, shell
 completions and the agent skill. To run it from a working tree instead — it
 rebuilds on every launch — use `./bin/install`.
+
+### On macOS
+
+With [Homebrew](https://brew.sh) installed, from a clone of this repository:
+
+```shell
+bin/install-macos
+```
+
+This installs GTK, libadwaita and Rust if needed, builds a release binary,
+puts **Omacharts.app** in `~/Applications`, and links `omacharts` into
+Homebrew’s `bin`. Run it again after `git pull` to update, or use
+`bin/install-macos --uninstall` to remove the app and command while keeping
+saved charts. Data lives in `~/.local/share/omacharts`.
+
+Shortcuts accept Command as well as Control. The installer starts Homebrew’s
+D-Bus service so terminal commands can reach an open window. Built-in themes
+work without an Omarchy desktop.
 
 ### Through Omarchy
 
@@ -181,7 +204,7 @@ Rough order, and nothing here is a promise.
 - [ ] **More data feeds.** Yahoo is one provider behind one interface. Others
       can sit behind the same one, including the paid ones with real-time
       prices.
-- [ ] **More indicators.** MACD and Bollinger bands are the obvious gaps.
+- [ ] **More indicators.** Order blocks and session ranges, beside the liquidity levels.
 - [ ] ...
 
 Pull requests are welcome.

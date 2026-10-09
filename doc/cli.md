@@ -116,6 +116,11 @@ Every indicator the app has, with every parameter it exposes:
 | `atr` | `--period`, `--height` |
 | `stochastic` | `--period` (%K length), `--k-smooth`, `--d-period`, `--overbought`, `--oversold`, `--height`, `--d-color` |
 | `volume` | `--height` |
+| `bollinger` | `--period`, `--bands`, `--band-alpha` |
+| `macd` | `--fast`, `--slow`, `--signal`, `--signal-color`, `--height` |
+| `liquidity` | `--period` (swing strength), `--tolerance` (ATRs), `--history`, `--low-color` |
+| `key_levels` | `--anchor`, `--low-color` |
+| `fair_value_gap` | `--min-size` (ATRs), `--history`, `--low-color` |
 | `vwap` | `--anchor`, `--bands`, `--band-alpha` |
 | `volume_profile` | `--anchor`, `--rows` (a number or `auto`), `--value-area`, `--poc-color` |
 

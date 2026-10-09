@@ -1607,7 +1607,7 @@ fn describe_indicator(stored: &Value) -> String {
         .find(|k| k.key() == kind)
         .map(|k| k.short_name().to_string())
         .unwrap_or_else(|| kind.to_string());
-    let lengths: Vec<String> = ["period", "k_smooth", "d_period"]
+    let lengths: Vec<String> = ["period", "k_smooth", "d_period", "fast", "slow", "signal"]
         .iter()
         .filter_map(|key| stored["params"][key].as_u64().map(|n| n.to_string()))
         .collect();
@@ -1626,6 +1626,14 @@ struct Edits {
     k_smooth: Option<u64>,
     d_period: Option<u64>,
     d_color: Option<ColorChoice>,
+    fast: Option<u64>,
+    slow: Option<u64>,
+    signal: Option<u64>,
+    signal_color: Option<ColorChoice>,
+    low_color: Option<ColorChoice>,
+    tolerance: Option<f64>,
+    min_size: Option<f64>,
+    history: Option<bool>,
     anchor: Option<Reset>,
     rows: Option<Option<u64>>,
     value_area: Option<f64>,
@@ -1648,6 +1656,14 @@ impl Edits {
             k_smooth: number(m, "k-smooth")?.map(|n| n as u64),
             d_period: number(m, "d-period")?.map(|n| n as u64),
             d_color: colour(m, "d-color")?,
+            fast: number(m, "fast")?.map(|n| n as u64),
+            slow: number(m, "slow")?.map(|n| n as u64),
+            signal: number(m, "signal")?.map(|n| n as u64),
+            signal_color: colour(m, "signal-color")?,
+            low_color: colour(m, "low-color")?,
+            tolerance: bounded(m, "tolerance", 0.0, 10.0)?,
+            min_size: bounded(m, "min-size", 0.0, 10.0)?,
+            history: arg(m, "history").map(|v| v == "on"),
             anchor: match arg(m, "anchor") {
                 None => None,
                 Some(text) => Some(Reset::from_key(text).ok_or_else(|| {
@@ -1709,6 +1725,14 @@ impl Edits {
             && self.k_smooth.is_none()
             && self.d_period.is_none()
             && self.d_color.is_none()
+            && self.fast.is_none()
+            && self.slow.is_none()
+            && self.signal.is_none()
+            && self.signal_color.is_none()
+            && self.low_color.is_none()
+            && self.tolerance.is_none()
+            && self.min_size.is_none()
+            && self.history.is_none()
             && self.anchor.is_none()
             && self.rows.is_none()
             && self.value_area.is_none()
@@ -1757,6 +1781,48 @@ impl Edits {
             match kind == IndicatorKind::Stochastic {
                 true => params["d_color"] = to_value(colour)?,
                 false => return Err(refuse("%D line")),
+            }
+        }
+        for (key, bars, what) in [
+            ("fast", self.fast, "fast average"),
+            ("slow", self.slow, "slow average"),
+            ("signal", self.signal, "signal line"),
+        ] {
+            if let Some(bars) = bars {
+                match params.get(key).is_some() {
+                    true => params[key] = json!(bars.max(1)),
+                    false => return Err(refuse(what)),
+                }
+            }
+        }
+        if let Some(colour) = &self.signal_color {
+            match kind == IndicatorKind::Macd {
+                true => params["signal_color"] = to_value(colour)?,
+                false => return Err(refuse("signal line")),
+            }
+        }
+        if let Some(colour) = &self.low_color {
+            match params.get("low_color").is_some() {
+                true => params["low_color"] = to_value(colour)?,
+                false => return Err(refuse("levels under price")),
+            }
+        }
+        if let Some(atrs) = self.tolerance {
+            match params.get("tolerance").is_some() {
+                true => params["tolerance"] = json!(atrs),
+                false => return Err(refuse("equal-highs tolerance")),
+            }
+        }
+        if let Some(atrs) = self.min_size {
+            match params.get("min_size").is_some() {
+                true => params["min_size"] = json!(atrs),
+                false => return Err(refuse("minimum gap size")),
+            }
+        }
+        if let Some(on) = self.history {
+            match params.get("history").is_some() {
+                true => params["history"] = json!(on),
+                false => return Err(refuse("history")),
             }
         }
         if let Some(anchor) = self.anchor {
@@ -1817,7 +1883,7 @@ impl Edits {
             }
         }
         if self.bands.is_some() || self.band_alpha.is_some() {
-            if kind != IndicatorKind::Vwap {
+            if kind != IndicatorKind::Vwap && kind != IndicatorKind::Bollinger {
                 return Err(refuse("bands"));
             }
             let Some(bands) = params["bands"].as_array_mut() else {
@@ -3308,6 +3374,27 @@ mod tests {
 
     /// Quietly ignoring a parameter the indicator has no use for would read
     /// as the command having worked.
+    #[test]
+    fn the_new_indicators_round_trip_their_parameters() {
+        for (kind, flags, expected) in [
+            ("bollinger", "--period 10 --bands 1,2 --band-alpha 0.2", json!({"period": 10})),
+            ("macd", "--fast 8 --slow 21 --signal 5 --signal-color Amber", json!({"fast": 8, "slow": 21, "signal": 5})),
+            ("liquidity", "--period 3 --tolerance 0.5 --history off --low-color Rose", json!({"period": 3, "tolerance": 0.5, "history": false})),
+            ("key_levels", "--anchor week --low-color Teal", json!({"reset": "week"})),
+            ("fair_value_gap", "--min-size 0.4 --history on", json!({"min_size": 0.4, "history": true})),
+        ] {
+            let store = Store::memory().unwrap();
+            run("chartbook create Macro --switch", &store);
+            let out = run(&format!("chart indicator add {kind} --book Macro {flags}"), &store);
+            assert_eq!(out.code, 0, "{}", out.err);
+            let listed = run("chart indicator list --book Macro --json", &store);
+            let parsed: Value = serde_json::from_str(&listed.out).unwrap();
+            for (key, value) in expected.as_object().unwrap() {
+                assert_eq!(&parsed["indicators"][0]["params"][key], value, "{kind}: {key}");
+            }
+        }
+    }
+
     #[test]
     fn a_parameter_an_indicator_has_no_use_for_is_refused() {
         let store = Store::memory().unwrap();

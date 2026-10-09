@@ -817,7 +817,7 @@ impl Watchlist {
         let keys = gtk::EventControllerKey::new();
         let this = self.clone();
         keys.connect_key_pressed(move |_, key, _, state| {
-            let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let ctrl = crate::ui::shortcuts::command_held(state);
             if !ctrl {
                 return glib::Propagation::Proceed;
             }
@@ -844,7 +844,8 @@ impl Watchlist {
             let held = ModifierType::CONTROL_MASK
                 | ModifierType::ALT_MASK
                 | ModifierType::SHIFT_MASK
-                | ModifierType::SUPER_MASK;
+                | ModifierType::SUPER_MASK
+                | ModifierType::META_MASK;
             if state.intersects(held) {
                 return glib::Propagation::Proceed;
             }
@@ -883,8 +884,9 @@ impl Watchlist {
         let keys = gtk::EventControllerKey::new();
         let this = self.clone();
         keys.connect_key_pressed(move |_, key, _, state| {
-            let wanted = gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::SHIFT_MASK;
+            let wanted = gtk::gdk::ModifierType::SHIFT_MASK;
             if !matches!(key, gtk::gdk::Key::n | gtk::gdk::Key::N)
+                || !crate::ui::shortcuts::command_held(state)
                 || !state.contains(wanted)
             {
                 return glib::Propagation::Proceed;

@@ -39,6 +39,14 @@ pub fn gtk_ready() -> bool {
     if gtk::is_initialized_main_thread() {
         return true;
     }
+    // Rust's test harness runs tests on worker threads. GTK on macOS must
+    // initialize on the process's main thread, and panics before it can report
+    // a missing display. Display-dependent tests use the same unavailable
+    // path as a headless Linux run; an already initialized main thread above
+    // can still exercise them.
+    if cfg!(target_os = "macos") {
+        return false;
+    }
     static ASKED: std::sync::Mutex<Option<bool>> = std::sync::Mutex::new(None);
     let mut asked = ASKED.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     match *asked {

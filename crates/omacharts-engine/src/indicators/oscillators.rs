@@ -50,7 +50,9 @@ pub fn rsi(bars: &[Bar], period: usize) -> Vec<Option<f64>> {
     let average_gain = wilder(&gains, period);
     let average_loss = wilder(&losses, period);
     for i in 0..gains.len() {
-        let (Some(gain), Some(loss)) = (average_gain[i], average_loss[i]) else { continue };
+        let (Some(gain), Some(loss)) = (average_gain[i], average_loss[i]) else {
+            continue;
+        };
         // A run with no down closes at all is RSI 100, not a division by zero.
         out[i + 1] = Some(if loss <= f64::EPSILON {
             100.0
@@ -109,8 +111,14 @@ pub fn stochastic(
     let mut raw = vec![None; bars.len()];
     for i in period - 1..bars.len() {
         let window = &bars[i + 1 - period..=i];
-        let low = window.iter().map(|bar| bar.low).fold(f64::INFINITY, f64::min);
-        let high = window.iter().map(|bar| bar.high).fold(f64::NEG_INFINITY, f64::max);
+        let low = window
+            .iter()
+            .map(|bar| bar.low)
+            .fold(f64::INFINITY, f64::min);
+        let high = window
+            .iter()
+            .map(|bar| bar.high)
+            .fold(f64::NEG_INFINITY, f64::max);
         if high - low > f64::EPSILON {
             raw[i] = Some(100.0 * (bars[i].close - low) / (high - low));
         }
@@ -121,12 +129,60 @@ pub fn stochastic(
     (k, d)
 }
 
+/// One value per bar, `None` where there is not yet enough history.
+type Series = Vec<Option<f64>>;
+
+/// MACD: the gap between a fast and a slow exponential average of closes,
+/// the signal line that averages that gap, and the histogram between the two.
+pub fn macd(bars: &[Bar], fast: usize, slow: usize, signal: usize) -> (Series, Series, Series) {
+    let (quick, steady) = (super::ema(bars, fast), super::ema(bars, slow));
+    let line: Vec<Option<f64>> = quick
+        .iter()
+        .zip(&steady)
+        .map(|(a, b)| Some((*a)? - (*b)?))
+        .collect();
+    let slow_line = ema_of(&line, signal);
+    let histogram = line
+        .iter()
+        .zip(&slow_line)
+        .map(|(a, b)| Some((*a)? - (*b)?))
+        .collect();
+    (line, slow_line, histogram)
+}
+
+fn ema_of(values: &[Option<f64>], period: usize) -> Vec<Option<f64>> {
+    let mut out = vec![None; values.len()];
+    let Some(start) = values.iter().position(Option::is_some) else {
+        return out;
+    };
+    if period == 0 || period > values.len() - start {
+        return out;
+    }
+    let seed = &values[start..start + period];
+    let Some(sum) = seed.iter().copied().sum::<Option<f64>>() else {
+        return out;
+    };
+    let alpha = 2.0 / (period as f64 + 1.0);
+    let mut value = sum / period as f64;
+    out[start + period - 1] = Some(value);
+    for i in start + period..values.len() {
+        let Some(next) = values[i] else { return out };
+        value = next * alpha + value * (1.0 - alpha);
+        out[i] = Some(value);
+    }
+    out
+}
+
 /// Simple average of the last `period` values, `None` while any of them is.
 fn mean_of(values: &[Option<f64>], period: usize) -> Vec<Option<f64>> {
     let mut out = vec![None; values.len()];
     for i in period.saturating_sub(1)..values.len() {
         let window = &values[i + 1 - period..=i];
-        out[i] = window.iter().copied().sum::<Option<f64>>().map(|sum| sum / period as f64);
+        out[i] = window
+            .iter()
+            .copied()
+            .sum::<Option<f64>>()
+            .map(|sum| sum / period as f64);
     }
     out
 }
@@ -154,11 +210,17 @@ mod tests {
     fn rsi_waits_for_enough_history() {
         let series = bars(&[1.0, 2.0, 3.0, 4.0, 5.0]);
         let values = rsi(&series, 14);
-        assert!(values.iter().all(Option::is_none), "no reading without a full period");
+        assert!(
+            values.iter().all(Option::is_none),
+            "no reading without a full period"
+        );
 
         let series = bars(&(0..30).map(|i| 100.0 + i as f64).collect::<Vec<_>>());
         let values = rsi(&series, 14);
-        assert!(values[13].is_none(), "the first change is on bar 1, so the first reading is 14");
+        assert!(
+            values[13].is_none(),
+            "the first change is on bar 1, so the first reading is 14"
+        );
         assert!(values[14].is_some());
     }
 
@@ -179,7 +241,9 @@ mod tests {
     #[test]
     fn rsi_sits_at_the_midpoint_when_gains_and_losses_match() {
         // Alternating equal up and down closes: no side has the upper hand.
-        let closes: Vec<f64> = (0..60).map(|i| if i % 2 == 0 { 100.0 } else { 101.0 }).collect();
+        let closes: Vec<f64> = (0..60)
+            .map(|i| if i % 2 == 0 { 100.0 } else { 101.0 })
+            .collect();
         // Not exactly fifty: the series ends on an up bar, and Wilder's
         // average still carries that. Close to it is the claim.
         let last = rsi(&bars(&closes), 14).pop().flatten().unwrap();
@@ -188,8 +252,9 @@ mod tests {
 
     #[test]
     fn rsi_stays_inside_its_scale() {
-        let closes: Vec<f64> =
-            (0..200).map(|i| 100.0 + (i as f64 * 0.7).sin() * 12.0 + i as f64 * 0.1).collect();
+        let closes: Vec<f64> = (0..200)
+            .map(|i| 100.0 + (i as f64 * 0.7).sin() * 12.0 + i as f64 * 0.1)
+            .collect();
         for value in rsi(&bars(&closes), 14).into_iter().flatten() {
             assert!((0.0..=100.0).contains(&value), "{value}");
         }
@@ -221,7 +286,9 @@ mod tests {
 
     #[test]
     fn atr_is_never_negative() {
-        let closes: Vec<f64> = (0..120).map(|i| 50.0 + (i as f64 * 0.3).cos() * 8.0).collect();
+        let closes: Vec<f64> = (0..120)
+            .map(|i| 50.0 + (i as f64 * 0.3).cos() * 8.0)
+            .collect();
         for value in atr(&bars(&closes), 14).into_iter().flatten() {
             assert!(value >= 0.0, "{value}");
         }
@@ -241,12 +308,21 @@ mod tests {
     }
 
     fn candle(high: f64, low: f64, close: f64) -> Bar {
-        Bar { ts: 0, open: close, high, low, close, volume: 100.0 }
+        Bar {
+            ts: 0,
+            open: close,
+            high,
+            low,
+            close,
+            volume: 100.0,
+        }
     }
 
     #[test]
     fn stochastic_waits_for_both_smoothings() {
-        let closes: Vec<f64> = (0..40).map(|i| 100.0 + (i as f64 * 0.4).sin() * 5.0).collect();
+        let closes: Vec<f64> = (0..40)
+            .map(|i| 100.0 + (i as f64 * 0.4).sin() * 5.0)
+            .collect();
         let (k, d) = stochastic(&bars(&closes), 14, 3, 3);
         // Fourteen bars for the range, two more for %K's average, two more for %D's.
         assert!(k[14].is_none() && k[15].is_some());
@@ -276,10 +352,41 @@ mod tests {
 
     #[test]
     fn stochastic_stays_inside_its_scale() {
-        let closes: Vec<f64> = (0..200).map(|i| 50.0 + (i as f64 * 0.17).sin() * 20.0).collect();
+        let closes: Vec<f64> = (0..200)
+            .map(|i| 50.0 + (i as f64 * 0.17).sin() * 20.0)
+            .collect();
         let (k, d) = stochastic(&bars(&closes), 14, 3, 3);
         for value in k.into_iter().chain(d).flatten() {
             assert!((0.0..=100.0).contains(&value), "{value}");
+        }
+    }
+
+    #[test]
+    fn macd_waits_for_its_averages_and_crosses_zero_with_the_trend() {
+        let mut closes: Vec<f64> = (0..60).map(|i| 100.0 + i as f64).collect();
+        closes.extend((0..60).map(|i| 160.0 - i as f64 * 2.0));
+        let (line, signal, histogram) = macd(&bars(&closes), 12, 26, 9);
+        assert!(
+            line[..25].iter().all(Option::is_none),
+            "nothing before the slow average"
+        );
+        assert!(line[25].is_some());
+        assert!(signal[..33].iter().all(Option::is_none) && signal[33].is_some());
+        assert!(line[59].unwrap() > 0.0, "a rising market reads above zero");
+        assert!(line[119].unwrap() < 0.0, "and a falling one below");
+        let (l, s, h) = (
+            line[119].unwrap(),
+            signal[119].unwrap(),
+            histogram[119].unwrap(),
+        );
+        assert!((h - (l - s)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn macd_of_a_flat_series_is_zero() {
+        let (line, signal, histogram) = macd(&bars(&[50.0; 60]), 12, 26, 9);
+        for series in [line, signal, histogram] {
+            assert!(series[59].unwrap().abs() < 1e-9);
         }
     }
 }

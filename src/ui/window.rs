@@ -1895,7 +1895,8 @@ impl Window {
                     omacharts_engine::Params::Volume { height }
                     | omacharts_engine::Params::Rsi { height, .. }
                     | omacharts_engine::Params::Atr { height, .. }
-                    | omacharts_engine::Params::Stochastic { height, .. } => *height = share,
+                    | omacharts_engine::Params::Stochastic { height, .. }
+                    | omacharts_engine::Params::Macd { height, .. } => *height = share,
                     _ => return,
                 }
                 resizer.set_indicators_of(&pane, indicators);
@@ -3911,7 +3912,7 @@ impl Window {
         let this = self.clone();
         keys.connect_key_pressed(move |_, key, _, state| {
             use gtk::gdk::Key;
-            let ctrl = state.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let ctrl = crate::ui::shortcuts::command_held(state);
             let alt = state.contains(gtk::gdk::ModifierType::ALT_MASK);
             let shift = state.contains(gtk::gdk::ModifierType::SHIFT_MASK);
 
@@ -4123,7 +4124,7 @@ impl Window {
         let this = self.clone();
         capture.connect_key_pressed(move |_, key, _, state| {
             use gtk::gdk::Key;
-            if !state.contains(gtk::gdk::ModifierType::CONTROL_MASK) || this.is_typing() {
+            if !crate::ui::shortcuts::command_held(state) || this.is_typing() {
                 return glib::Propagation::Proceed;
             }
             // Only the bare Ctrl combos. Ctrl+Shift+X removes the chartbook

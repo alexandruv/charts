@@ -1120,7 +1120,7 @@ impl ChartView {
             }
             let modifiers = controller.current_event_state();
             let shift = modifiers.contains(gtk::gdk::ModifierType::SHIFT_MASK);
-            let ctrl = modifiers.contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let ctrl = crate::ui::shortcuts::command_held(modifiers);
 
             let (width, height) = (area.width() as f64, area.height() as f64);
             let mut s = state.borrow_mut();
@@ -1530,9 +1530,12 @@ fn draw(cr: &cairo::Context, width: f64, height: f64, state: &State) {
     draw_time_axis(cr, state, &columns.bars, plot_x, plot_w, height, bar_w, bars_x);
     // Shaded things go under the candles; lines go over. A band drawn on top
     // of the bars hides the thing it is describing.
+    let price_plot = (plot_x, price_y, plot_w, price_h);
     draw_indicator_fills(cr, state, &columns, &to_y);
+    draw_levels(cr, state, &columns, &to_y, price_plot, Layer::Zones);
     draw_candles(cr, state, &columns.bars, bars_x, bar_w, &to_y);
     draw_indicator_lines(cr, state, &columns, &to_y);
+    draw_levels(cr, state, &columns, &to_y, price_plot, Layer::Lines);
 
     for (at, row) in plan.rows.iter().enumerate() {
         draw_row_edge(cr, state, &plan, at);
@@ -2031,7 +2034,7 @@ fn pane_plot(top: f64, height: f64) -> (f64, f64) {
 fn pane_decimals(pane: &omacharts_engine::indicators::Pane, low: f64, high: f64) -> usize {
     match pane.bounds {
         Some(_) => 2,
-        None => decimals_for(nice_step(high - low, 3)),
+        None => decimals_for(nice_step(high - low, 3)) + usize::from(pane.histogram.is_some()),
     }
 }
 
@@ -2041,6 +2044,7 @@ fn pane_decimals(pane: &omacharts_engine::indicators::Pane, low: f64, high: f64)
 fn signal_colour(state: &State, drawn: &Drawn) -> String {
     let chosen = match &drawn.indicator.params {
         omacharts_engine::Params::Stochastic { d_color, .. } => d_color.as_ref(),
+        omacharts_engine::Params::Macd { signal_color, .. } => signal_color.as_ref(),
         _ => None,
     };
     state.theme.companion_or(chosen, &drawn.color)
@@ -2071,7 +2075,7 @@ fn draw_pane(
     let plot_x = columns.plot_x;
     let (first, visible) = (columns.first, columns.visible);
     let values = on_screen(&pane.values, first, visible);
-    let Some((low, high)) = pane_range(pane, values) else { return };
+    let Some((low, high)) = pane_range(pane, first, visible) else { return };
     let (inner_top, inner_h) = pane_plot(top, height);
     let to_y = |value: f64| inner_top + inner_h * (high - value) / (high - low);
 
@@ -2116,6 +2120,20 @@ fn draw_pane(
     }
 
     draw_pane_name(cr, state, drawn, plot_x, top);
+
+    if let Some(histogram) = &pane.histogram {
+        let histogram = on_screen(histogram, first, visible);
+        let zero = to_y(0.0).clamp(top, top + height);
+        let bar = (columns.bar_w * 0.6).max(1.0);
+        for at in 0..columns.len() {
+            let Some(Some(value)) = histogram.get(columns.offset(at)) else { continue };
+            let colour = if *value >= 0.0 { &state.scheme.up } else { &state.scheme.down };
+            let y = to_y(*value).clamp(top, top + height);
+            colors::set_source_alpha(cr, colour, 0.55);
+            cr.rectangle(columns.x(at) - bar / 2.0, y.min(zero), bar, (y - zero).abs().max(0.5));
+            let _ = cr.fill();
+        }
+    }
 
     // The lines last, over their own furniture.
     let stroke = drawn.indicator.stroke;
@@ -2190,11 +2208,16 @@ fn spread_chips(ys: &mut [f64], gap: f64, floor: f64) {
 /// scale it was drawn on, or the number on the axis is not the line under it.
 fn pane_range(
     pane: &omacharts_engine::indicators::Pane,
-    values: &[Option<f64>],
+    first: usize,
+    visible: usize,
 ) -> Option<(f64, f64)> {
     if let Some(bounds) = pane.bounds {
         return Some(bounds);
     }
+    let values = [Some(&pane.values), pane.signal.as_ref(), pane.histogram.as_ref()]
+        .into_iter()
+        .flatten()
+        .flat_map(|series| on_screen(series, first, visible));
     // Every visible value, not one per column: what the strip is scaled to has
     // to be the range the line actually covers, or a peak that falls between
     // two columns would push the line off the top of its own strip.
@@ -2202,12 +2225,16 @@ fn pane_range(
     // top and bottom of its strip has no shape to read.
     let mut low = f64::MAX;
     let mut high = f64::MIN;
-    for value in values.iter().flatten() {
+    for value in values.flatten() {
         low = low.min(*value);
         high = high.max(*value);
     }
     if !low.is_finite() || !high.is_finite() {
         return None;
+    }
+    if pane.histogram.is_some() {
+        low = low.min(0.0);
+        high = high.max(0.0);
     }
     if (high - low).abs() < f64::EPSILON {
         Some((low - 1.0, high + 1.0))
@@ -2397,7 +2424,7 @@ fn draw_pane_value(
     else {
         return;
     };
-    let Some((low, high)) = pane_range(pane, on_screen(&pane.values, first, visible)) else {
+    let Some((low, high)) = pane_range(pane, first, visible) else {
         return;
     };
     let (inner_top, inner_h) = pane_plot(row.top, row.height);
@@ -2577,7 +2604,7 @@ fn draw_indicator_fills(
             }
             // These draw in a strip of their own, where the price scale does
             // not reach, so there is nothing to do over the candles.
-            Output::Volume { .. } | Output::Pane(_) | Output::Line(_) => {}
+            Output::Volume { .. } | Output::Pane(_) | Output::Line(_) | Output::Levels(_) => {}
         }
     }
 }
@@ -2630,8 +2657,111 @@ fn draw_indicator_lines(
                     cr.restore().ok();
                 }
             }
-            Output::Profiles(_) | Output::Volume { .. } | Output::Pane(_) => {}
+            Output::Profiles(_) | Output::Volume { .. } | Output::Pane(_) | Output::Levels(_) => {}
         }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Layer {
+    Zones,
+    Lines,
+}
+
+fn draw_levels(
+    cr: &cairo::Context,
+    state: &State,
+    columns: &Columns,
+    to_y: &impl Fn(f64) -> f64,
+    (plot_x, plot_y, plot_w, plot_h): (f64, f64, f64, f64),
+    layer: Layer,
+) {
+    let (first, last) = (columns.first, columns.first + columns.visible);
+    let right = plot_x + plot_w;
+    for drawn in state.indicators.iter().filter(|d| d.indicator.visible) {
+        let Output::Levels(levels) = &drawn.output else { continue };
+        let low_choice = match &drawn.indicator.params {
+            omacharts_engine::Params::Liquidity { low_color, .. }
+            | omacharts_engine::Params::KeyLevels { low_color, .. }
+            | omacharts_engine::Params::FairValueGap { low_color, .. } => low_color.as_ref(),
+            _ => None,
+        };
+        let low_colour =
+            low_choice.map_or_else(|| drawn.color.clone(), |choice| choice.resolve(&state.theme));
+        let stroke = drawn.indicator.stroke;
+
+        cr.save().ok();
+        cr.rectangle(plot_x, plot_y, plot_w, plot_h);
+        cr.clip();
+        for level in levels {
+            if level.to.is_some_and(|end| end < first) || level.from >= last {
+                continue;
+            }
+            let colour = match level.side {
+                indicators::Side::Above => drawn.color.as_str(),
+                indicators::Side::Below => low_colour.as_str(),
+            };
+            let x_of = |index: usize| {
+                if index >= last { right } else { columns.left_of(index.max(first)) }
+            };
+            let middle = |index: usize| {
+                if index >= last { right } else { (x_of(index) + x_of(index + 1)) / 2.0 }
+            };
+            let start = x_of(level.from);
+            let stop = level.to.map_or(right, middle).min(right);
+            let taken = level.swept.map(|at| middle(at.max(level.from)).clamp(start, stop));
+            let fresh_until = taken.unwrap_or(stop);
+            let zone = (level.top - level.bottom).abs() > f64::EPSILON;
+
+            match (layer, zone) {
+                (Layer::Zones, true) => {
+                    let (y_top, y_bottom) = (to_y(level.top), to_y(level.bottom));
+                    let h = (y_bottom - y_top).max(1.0);
+                    colors::set_source_alpha(cr, colour, 0.20);
+                    cr.rectangle(start, y_top, fresh_until - start, h);
+                    let _ = cr.fill();
+                    if stop > fresh_until {
+                        colors::set_source_alpha(cr, colour, 0.08);
+                        cr.rectangle(fresh_until, y_top, stop - fresh_until, h);
+                        let _ = cr.fill();
+                    }
+                }
+                (Layer::Lines, false) if !stroke.is_hidden() => {
+                    let y = to_y(level.top).round() + 0.5;
+                    let width = if level.strong { stroke.width * 1.6 } else { stroke.width };
+                    let spent = level.to.is_some() && level.to == level.swept;
+                    cr.set_line_width(if spent { width.min(1.0) } else { width });
+                    cr.set_dash(&stroke.style.dashes(width), 0.0);
+                    colors::set_source_alpha(cr, colour, if spent { 0.35 } else { 0.9 });
+                    cr.move_to(start, y);
+                    cr.line_to(fresh_until, y);
+                    let _ = cr.stroke();
+                    if stop > fresh_until {
+                        cr.set_line_width(width.min(1.0));
+                        cr.set_dash(&indicators::LineStyle::Dashed.dashes(1.0), 0.0);
+                        colors::set_source_alpha(cr, colour, 0.4);
+                        cr.move_to(fresh_until, y);
+                        cr.line_to(stop, y);
+                        let _ = cr.stroke();
+                    }
+                }
+                _ => {}
+            }
+
+            if layer == Layer::Lines && level.reaches_the_end() && !level.label.is_empty() {
+                let y = match level.side {
+                    indicators::Side::Above => to_y(level.top) - 3.0,
+                    indicators::Side::Below => to_y(level.bottom) + 10.0,
+                };
+                cr.select_font_face("sans-serif", cairo::FontSlant::Normal, cairo::FontWeight::Bold);
+                cr.set_font_size(9.0);
+                let Ok(extents) = cr.text_extents(level.label) else { continue };
+                colors::set_source_alpha(cr, colour, if level.swept.is_some() { 0.5 } else { 0.9 });
+                cr.move_to(right - extents.width() - 4.0, y);
+                let _ = cr.show_text(level.label);
+            }
+        }
+        cr.restore().ok();
     }
 }
 

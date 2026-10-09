@@ -35,11 +35,19 @@ pub struct Binding {
 }
 
 const fn global(action: &'static str, accels: &'static [&'static str]) -> Binding {
-    Binding { action, accels, global: true }
+    Binding {
+        action,
+        accels,
+        global: true,
+    }
 }
 
 const fn careful(action: &'static str, accels: &'static [&'static str]) -> Binding {
-    Binding { action, accels, global: false }
+    Binding {
+        action,
+        accels,
+        global: false,
+    }
 }
 
 pub const BINDINGS: &[Binding] = &[
@@ -103,8 +111,25 @@ pub const MAIN_MENU: &str = "F10";
 /// Hand the application everything it is safe to own.
 pub fn install(app: &adw::Application) {
     for binding in BINDINGS.iter().filter(|binding| binding.global) {
-        app.set_accels_for_action(binding.action, binding.accels);
+        let mut accels: Vec<String> = binding.accels.iter().map(|a| a.to_string()).collect();
+        if cfg!(target_os = "macos") {
+            accels.extend(
+                binding
+                    .accels
+                    .iter()
+                    .filter(|a| a.contains("<Ctrl>"))
+                    .map(|a| a.replace("<Ctrl>", "<Meta>")),
+            );
+        }
+        let accels: Vec<&str> = accels.iter().map(String::as_str).collect();
+        app.set_accels_for_action(binding.action, &accels);
     }
+}
+
+/// Control on every platform, with Command accepted on macOS as well.
+pub fn command_held(state: gtk::gdk::ModifierType) -> bool {
+    state.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+        || (cfg!(target_os = "macos") && state.contains(gtk::gdk::ModifierType::META_MASK))
 }
 
 fn binding(action: &str) -> Option<&'static Binding> {
@@ -203,7 +228,11 @@ mod tests {
                 );
             }
             assert!(!binding.accels.is_empty(), "{} has no key", binding.action);
-            assert!(binding.action.contains('.'), "{} has no action group", binding.action);
+            assert!(
+                binding.action.contains('.'),
+                "{} has no action group",
+                binding.action
+            );
         }
     }
 
@@ -215,7 +244,13 @@ mod tests {
         if !crate::ui::gtk_ready() {
             return;
         }
-        for accel in [ADD_SYMBOL, ADD_SECTION, REMOVE_SYMBOL, ADD_INDICATOR, MAIN_MENU] {
+        for accel in [
+            ADD_SYMBOL,
+            ADD_SECTION,
+            REMOVE_SYMBOL,
+            ADD_INDICATOR,
+            MAIN_MENU,
+        ] {
             assert!(accel_label(accel).is_some(), "{accel} spells nothing");
         }
     }
@@ -229,8 +264,22 @@ mod tests {
             return;
         }
         assert_eq!(tooltip("Watchlist", "win.watchlist"), "Watchlist (Ctrl+B)");
-        assert_eq!(tooltip_with_key("Add a symbol", ADD_SYMBOL), "Add a symbol (Ctrl+N)");
-        assert_eq!(tooltip("Turn into a watchlist", "section.promote"), "Turn into a watchlist");
+        assert_eq!(
+            tooltip_with_key("Add a symbol", ADD_SYMBOL),
+            "Add a symbol (Ctrl+N)"
+        );
+        assert_eq!(
+            tooltip("Turn into a watchlist", "section.promote"),
+            "Turn into a watchlist"
+        );
+    }
+
+    #[test]
+    fn command_modifiers_follow_the_platform() {
+        use gtk::gdk::ModifierType;
+        assert!(command_held(ModifierType::CONTROL_MASK));
+        assert_eq!(command_held(ModifierType::META_MASK), cfg!(target_os = "macos"));
+        assert!(!command_held(ModifierType::SHIFT_MASK));
     }
 
     #[test]
@@ -251,7 +300,9 @@ mod tests {
     fn the_printing_keys_are_left_alone() {
         for accel in ["<Ctrl>p", "<Ctrl><Shift>p"] {
             assert!(
-                !BINDINGS.iter().any(|binding| binding.accels.contains(&accel)),
+                !BINDINGS
+                    .iter()
+                    .any(|binding| binding.accels.contains(&accel)),
                 "{accel} is reserved for printing"
             );
         }
@@ -264,7 +315,10 @@ mod tests {
         // bug it causes is somebody else's afternoon.
         for action in ["chart.split-v", "chart.close", "win.shortcuts"] {
             let binding = binding(action).expect(action);
-            assert!(!binding.global, "{action} must stay out of the accelerator table");
+            assert!(
+                !binding.global,
+                "{action} must stay out of the accelerator table"
+            );
         }
     }
 
